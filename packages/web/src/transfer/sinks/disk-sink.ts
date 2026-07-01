@@ -18,7 +18,16 @@ export class DiskSink implements Sink {
   }
 }
 
-export async function pickDiskSink(suggestedName: string): Promise<DiskSink | null> {
+/**
+ * Prompts for a save location and returns a sink, or null if the API is unavailable.
+ *
+ * On resume (`startOffset > 0`) the file is reopened keeping existing data and the write cursor
+ * is seeked past the bytes already on disk, so the engine's sequential writes append correctly.
+ */
+export async function pickDiskSink(
+  suggestedName: string,
+  startOffset = 0,
+): Promise<DiskSink | null> {
   const picker = (
     globalThis as {
       showSaveFilePicker?: (opts: { suggestedName?: string }) => Promise<FileSystemFileHandle>;
@@ -27,6 +36,7 @@ export async function pickDiskSink(suggestedName: string): Promise<DiskSink | nu
   if (!picker) return null;
 
   const handle = await picker({ suggestedName });
-  const writable = await handle.createWritable();
+  const writable = await handle.createWritable({ keepExistingData: startOffset > 0 });
+  if (startOffset > 0) await writable.seek(startOffset);
   return new DiskSink(writable);
 }

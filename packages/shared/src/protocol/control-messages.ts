@@ -45,9 +45,12 @@ export interface IceSignal {
  */
 export type TransferControlMessage =
   | { t: 'manifest'; manifest: Manifest }
+  // Receiver → sender: continue from this byte offset (0 = fresh). Sent in reply to `manifest`.
+  | { t: 'resume'; durableOffset: number }
   | { t: 'block'; index: number; byteLength: number; hash: string }
   | { t: 'ack'; durableOffset: number }
-  | { t: 'complete'; merkleRoot: string }
+  // Completion is proven by per-block hashes + durableOffset === file size, so no whole-file root.
+  | { t: 'complete' }
   | { t: 'cancel' };
 
 export type ControlMessage = SignalingMessage | TransferControlMessage;

@@ -1,11 +1,14 @@
 import type { Manifest } from '../protocol/manifest';
 import type { TransferProgress } from '../types/transfer-state';
 import type { IncomingMessage, Sink, TransferChannel } from './channel';
-import { merkleRoot, sha256Hex } from './integrity';
+import type { ResumeStore } from './resume-store';
+import { sha256Hex } from './integrity';
 
 export interface ReceiverOptions {
   channel: TransferChannel;
   sink: Sink;
+  /** When provided, durable offsets persist across sessions so transfers can resume. */
+  resumeStore?: ResumeStore;
   now?: () => number;
 }
 
@@ -17,25 +20,26 @@ interface ReceiverEvents {
 
 /**
  * Reassembles a file from interleaved data frames + block markers, verifies each block's hash
- * before writing it to the sink, acks the durable offset, and checks the whole-file root on
- * completion.
+ * before writing it to the sink, persists + acks the durable offset, and completes when the
+ * durable offset reaches the file size.
  *
- * Incoming messages are processed on a serial promise chain so async block verification never
- * races the next message — the reliable+ordered channel guarantees send order, and this
- * preserves it through the async handlers.
+ * On `manifest` it loads any persisted offset and replies with `resume`, telling the sender
+ * where to continue. Messages run on a serial promise chain so async verification/persistence
+ * never races the next message.
  */
 export class TransferReceiver {
   private readonly channel: TransferChannel;
   private readonly sink: Sink;
+  private readonly resumeStore: ResumeStore | undefined;
   private readonly now: () => number;
 
   private manifest: Manifest | null = null;
   private total = 0;
   private startedAt = 0;
+  private baseline = 0;
   private durableOffset = 0;
   private blockParts: Uint8Array[] = [];
   private blockLength = 0;
-  private readonly blockHashes: string[] = [];
   private chain: Promise<void> = Promise.resolve();
   private failed = false;
 
@@ -48,6 +52,7 @@ export class TransferReceiver {
   constructor(opts: ReceiverOptions) {
     this.channel = opts.channel;
     this.sink = opts.sink;
+    this.resumeStore = opts.resumeStore;
     this.now = opts.now ?? (() => Date.now());
     this.channel.onMessage((m) => {
       this.chain = this.chain.then(() => this.process(m));
@@ -71,15 +76,13 @@ export class TransferReceiver {
     const msg = m.msg;
     switch (msg.t) {
       case 'manifest':
-        this.manifest = msg.manifest;
-        this.total = msg.manifest.files.reduce((sum, f) => sum + f.size, 0);
-        this.startedAt = this.now();
+        await this.onManifest(msg.manifest);
         return;
       case 'block':
         await this.commitBlock(msg.index, msg.byteLength, msg.hash);
         return;
       case 'complete':
-        await this.finish(msg.merkleRoot);
+        await this.finish();
         return;
       case 'cancel':
         await this.sink.abort?.();
@@ -88,6 +91,16 @@ export class TransferReceiver {
       default:
         return;
     }
+  }
+
+  private async onManifest(manifest: Manifest): Promise<void> {
+    this.manifest = manifest;
+    this.total = manifest.files.reduce((sum, f) => sum + f.size, 0);
+    const record = await this.resumeStore?.load(manifest.transferId);
+    this.durableOffset = record?.durableOffset ?? 0;
+    this.baseline = this.durableOffset;
+    this.startedAt = this.now();
+    this.channel.sendControl({ t: 'resume', durableOffset: this.durableOffset });
   }
 
   private async commitBlock(index: number, byteLength: number, hash: string): Promise<void> {
@@ -104,16 +117,24 @@ export class TransferReceiver {
 
     await this.sink.write(block);
     this.durableOffset += block.length;
-    this.blockHashes[index] = hash;
+    if (this.manifest) {
+      await this.resumeStore?.save({
+        transferId: this.manifest.transferId,
+        durableOffset: this.durableOffset,
+      });
+    }
     this.channel.sendControl({ t: 'ack', durableOffset: this.durableOffset });
     this.emitProgress();
   }
 
-  private async finish(expectedRoot: string): Promise<void> {
-    if ((await merkleRoot(this.blockHashes)) !== expectedRoot) {
-      return this.fail(new Error('whole-file integrity check failed'));
+  private async finish(): Promise<void> {
+    if (this.durableOffset !== this.total) {
+      return this.fail(
+        new Error(`incomplete transfer: ${this.durableOffset}/${this.total} bytes`),
+      );
     }
     await this.sink.close();
+    if (this.manifest) await this.resumeStore?.clear(this.manifest.transferId);
     this.emit('done');
   }
 
@@ -125,7 +146,7 @@ export class TransferReceiver {
 
   private emitProgress(): void {
     const elapsed = (this.now() - this.startedAt) / 1000;
-    const bytesPerSecond = elapsed > 0 ? this.durableOffset / elapsed : 0;
+    const bytesPerSecond = elapsed > 0 ? (this.durableOffset - this.baseline) / elapsed : 0;
     const etaSeconds = bytesPerSecond > 0 ? (this.total - this.durableOffset) / bytesPerSecond : 0;
     this.emit('progress', {
       transferId: this.manifest?.transferId ?? '',
