@@ -2,12 +2,24 @@
  * Environment-driven configuration. Fails fast on invalid input so a misconfigured
  * deploy never silently starts on the wrong port or with no origin allowlist.
  */
+import type { TurnSettings } from './turn/credentials';
+
 export interface Config {
   host: string;
   port: number;
   /** Allowed browser origins for CORS / WebSocket upgrade (empty = allow all, dev only). */
   originAllowlist: string[];
   logLevel: string;
+  turn: TurnSettings;
+}
+
+const DEFAULT_STUN = 'stun:stun.l.google.com:19302';
+
+function csv(value: string | undefined): string[] {
+  return (value ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -16,13 +28,21 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     throw new Error(`Invalid PORT: ${String(env.PORT)}`);
   }
 
+  const ttlSeconds = Number(env.TURN_TTL ?? 86400);
+  if (!Number.isInteger(ttlSeconds) || ttlSeconds <= 0) {
+    throw new Error(`Invalid TURN_TTL: ${String(env.TURN_TTL)}`);
+  }
+
   return {
     host: env.HOST ?? '0.0.0.0',
     port,
-    originAllowlist: (env.ORIGIN_ALLOWLIST ?? '')
-      .split(',')
-      .map((s) => s.trim())
-      .filter(Boolean),
+    originAllowlist: csv(env.ORIGIN_ALLOWLIST),
     logLevel: env.LOG_LEVEL ?? 'info',
+    turn: {
+      stunUrls: csv(env.STUN_URLS ?? DEFAULT_STUN),
+      turnUrls: csv(env.TURN_URLS),
+      secret: env.TURN_SECRET || undefined,
+      ttlSeconds,
+    },
   };
 }
