@@ -2,9 +2,11 @@
  * Wire contract for the signaling channel and the in-band control stream.
  *
  * This union is shared verbatim by the browser client and the signaling server so both
- * ends validate against the same shape. Data-carrying frames are binary (see framing.ts);
- * everything here is small JSON control traffic.
+ * ends validate against the same shape. File data travels as raw binary frames interleaved
+ * with these; everything here is small JSON control traffic.
  */
+
+import type { Manifest } from './manifest';
 
 /** ICE server entry handed to the browser to configure RTCPeerConnection. */
 export interface IceServer {
@@ -35,12 +37,17 @@ export interface IceSignal {
   candidate: unknown;
 }
 
-/** In-band control-plane messages (over the DataChannel, once connected). */
+/**
+ * In-band control-plane messages (JSON strings over the DataChannel, once connected).
+ * Data itself travels as raw binary frames interleaved with these; because the channel is
+ * reliable + ordered, a `block` marker is guaranteed to arrive after all of its data frames,
+ * so no per-frame header is needed (Phase 8).
+ */
 export type TransferControlMessage =
-  | { t: 'manifest'; transferId: string }
-  | { t: 'resume'; transferId: string; durableOffset: number }
-  | { t: 'ack'; transferId: string; durableOffset: number }
-  | { t: 'complete'; transferId: string; merkleRoot: string }
-  | { t: 'cancel'; transferId: string };
+  | { t: 'manifest'; manifest: Manifest }
+  | { t: 'block'; index: number; byteLength: number; hash: string }
+  | { t: 'ack'; durableOffset: number }
+  | { t: 'complete'; merkleRoot: string }
+  | { t: 'cancel' };
 
 export type ControlMessage = SignalingMessage | TransferControlMessage;
