@@ -1,6 +1,6 @@
 # Phase 1 — Requirements Review
 
-Status: **In review (awaiting decisions before Phase 2)**
+Status: **Complete — decisions locked (see §6). Ready for Phase 2.**
 
 This document is a critical review of the product brief. Its job is not to agree — it is
 to surface contradictions, hidden costs, and physics-level constraints *before* any
@@ -101,13 +101,29 @@ Build the smallest thing that proves the hard part (reliable p2p streaming), the
 - **Growth:** resume engine, folders, QR pairing, pause/resume, self-hosted TURN, local history.
 - **Production:** multi-region TURN, signaling horizontal scale + Redis, monitoring, abuse controls.
 
-## 5. Open decisions blocking Phase 2
+## 6. Locked decisions
 
-- **Q1 — Sync vs async:** Is "both peers online at the same time" an acceptable hard constraint?
-  (If async/offline delivery is required, we must design a relay store and the "no cloud" rule bends.)
-- **Q2 — MVP file ceiling:** What is the largest file the MVP must handle? This sets whether we
-  build the full resume + stream-to-disk engine now or defer it.
-- **Q3 — TURN for MVP:** Managed provider (zero maintenance, pay per GB) vs none (cheapest, ~80%
-  connect success) for launch.
+- **Q1 — Sync vs async → SYNCHRONOUS.** Both peers must be online simultaneously. Pure P2P;
+  "no cloud storage" holds. Resume means *both peers reconnect and continue from the last
+  acknowledged chunk*, never offline store-and-forward.
+- **Q2 — File ceiling → 1TB+ target from day one.** Consequences accepted:
+  - MVP is **Chromium-desktop-first**; Firefox/Safari receive is feature-detected and capped
+    to a memory-safe size with a clear message, not silently broken.
+  - The **resume engine is mandatory**, not deferred — long transfers will drop.
+  - Receive sink = **File System Access API** (`showSaveFilePicker` + `WritableStream`).
+  - **Build sequence to avoid a big-bang stall:** (a) streaming transport core that works to any
+    size *within a live session*, then (b) cross-session resume + disk-sink layer on top.
+- **Q3 — TURN → Managed provider, size-capped.** Wire a managed TURN provider with a per-session
+  relayed-byte cap; transfers above the cap require a direct path. Bounds cost, keeps ~95%+
+  connect success, zero server maintenance.
+- **Push → skipped for now.** Commits stay local; remote wired later.
 
-Nothing in Phases 2+ is built until these three are answered.
+## 7. Confirmed MVP scope
+
+Code pairing · single + multiple files + folders · drag/drop · direct p2p (public STUN) with
+managed size-capped TURN fallback · Web Worker chunked streaming with backpressure · integrity
+verification · progress / speed / ETA · pause / resume / cancel · cross-session resume engine ·
+File System Access receive sink (Chromium) with feature-detected degradation elsewhere.
+
+Deferred to Growth/Production: QR pairing, clipboard/text/image types, local history UI,
+self-hosted TURN, multi-region, signaling horizontal scale + Redis, monitoring/abuse controls.
