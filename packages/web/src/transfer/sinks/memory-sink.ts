@@ -7,7 +7,8 @@ import type { Sink } from '@shareit/shared';
  */
 export class MemorySink implements Sink {
   private parts: Uint8Array[] = [];
-  constructor(private readonly fileName: string) {}
+  /** Mutable so the app can set the real name once the manifest arrives. */
+  constructor(public fileName: string) {}
 
   write(chunk: Uint8Array): Promise<void> {
     this.parts.push(chunk);

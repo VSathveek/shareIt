@@ -77,6 +77,44 @@ body {
   background: var(--error);
   color: var(--error-text);
 }
+.banner--ok {
+  background: #14301c;
+  color: #7ee0a0;
+}
+
+.progress {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 16px;
+}
+.progress__status,
+.progress__file {
+  font-size: 14px;
+  color: var(--muted);
+}
+.progress__bar {
+  height: 10px;
+  background: #10131a;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.progress__fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.2s ease;
+}
+.progress__meta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  color: var(--muted);
+}
+.progress__sas {
+  font-size: 13px;
+  color: var(--warn-text);
+}
 
 .mode-switch {
   display: inline-flex;

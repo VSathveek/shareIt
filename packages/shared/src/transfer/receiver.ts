@@ -9,6 +9,8 @@ export interface ReceiverOptions {
   sink: Sink;
   /** When provided, durable offsets persist across sessions so transfers can resume. */
   resumeStore?: ResumeStore;
+  /** Called when the manifest arrives (filename/size become known) — for UI + sink naming. */
+  onManifest?: (manifest: Manifest) => void;
   now?: () => number;
 }
 
@@ -31,6 +33,7 @@ export class TransferReceiver {
   private readonly channel: TransferChannel;
   private readonly sink: Sink;
   private readonly resumeStore: ResumeStore | undefined;
+  private readonly onManifestCb: ((manifest: Manifest) => void) | undefined;
   private readonly now: () => number;
 
   private manifest: Manifest | null = null;
@@ -53,6 +56,7 @@ export class TransferReceiver {
     this.channel = opts.channel;
     this.sink = opts.sink;
     this.resumeStore = opts.resumeStore;
+    this.onManifestCb = opts.onManifest;
     this.now = opts.now ?? (() => Date.now());
     this.channel.onMessage((m) => {
       this.chain = this.chain.then(() => this.process(m));
@@ -96,6 +100,7 @@ export class TransferReceiver {
   private async onManifest(manifest: Manifest): Promise<void> {
     this.manifest = manifest;
     this.total = manifest.files.reduce((sum, f) => sum + f.size, 0);
+    this.onManifestCb?.(manifest);
     const record = await this.resumeStore?.load(manifest.transferId);
     this.durableOffset = record?.durableOffset ?? 0;
     this.baseline = this.durableOffset;
