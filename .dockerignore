@@ -1,0 +1,7 @@
+**/node_modules
+**/dist
+.git
+.github
+docs
+*.log
+packages/web/e2e
