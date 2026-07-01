@@ -22,6 +22,9 @@ const MAX_WS_PAYLOAD = 64 * 1024;
 export function buildServer(config?: Partial<Config>): FastifyInstance {
   const app = Fastify({
     logger: { level: config?.logLevel ?? 'info' },
+    // Behind Cloudflare/Railway, use X-Forwarded-For so rate-limit keys are real client IPs
+    // (otherwise every client shares the proxy IP and one abuser throttles everyone).
+    trustProxy: true,
   });
 
   app.get('/health', async () => ({ status: 'ok', uptime: process.uptime() }));
@@ -35,6 +38,12 @@ export function buildServer(config?: Partial<Config>): FastifyInstance {
     create: new SlidingWindowLimiter(security.createPerMinute, MINUTE_MS),
     join: new SlidingWindowLimiter(security.joinPerMinute, MINUTE_MS),
   });
+
+  app.get('/metrics', async () => ({
+    uptime: process.uptime(),
+    activeSessions: store.size(),
+    ...hub.getMetrics(),
+  }));
 
   app.register(fastifyWebsocket, { options: { maxPayload: MAX_WS_PAYLOAD } });
   app.register(async (scoped) => {

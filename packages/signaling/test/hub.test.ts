@@ -75,6 +75,21 @@ describe('SignalingHub', () => {
     expect(a.sent[1]).toEqual({ t: 'error', reason: 'rate limited' });
   });
 
+  it('counts created / joined / relayed / rejected in metrics', () => {
+    const { hub } = newHub();
+    const a = fakePeer('a');
+    const b = fakePeer('b');
+
+    hub.onMessage(a, JSON.stringify({ t: 'create' }));
+    const created = a.sent[0];
+    const code = created?.t === 'created' ? created.code : '';
+    hub.onMessage(b, JSON.stringify({ t: 'join', code }));
+    hub.onMessage(a, JSON.stringify({ t: 'signal', data: { kind: 'sdp', sdp: 'o' } }));
+    hub.onMessage(a, JSON.stringify({ t: 'join', code: 'ZZZZZZ' })); // not-found → rejected
+
+    expect(hub.getMetrics()).toEqual({ created: 1, joined: 1, relayed: 1, rejected: 1 });
+  });
+
   it('notifies the counterpart when a peer disconnects', () => {
     const { hub } = newHub();
     const a = fakePeer('a');

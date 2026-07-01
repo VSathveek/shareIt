@@ -7,6 +7,16 @@ const REAP_INTERVAL_MS = 60 * 1000;
 const config = loadConfig();
 const app = buildServer(config);
 
+app.log.info(
+  {
+    port: config.port,
+    originAllowlist: config.originAllowlist.length > 0 ? config.originAllowlist : 'ALL (dev)',
+    turnEnabled: config.turn.turnUrls.length > 0 && Boolean(config.turn.secret),
+    rateLimits: config.security,
+  },
+  'signaling configuration',
+);
+
 const reaper = setInterval(() => {
   const removed = app.sessionStore.reapPending(PENDING_TTL_MS);
   if (removed > 0) app.log.debug(`reaped ${removed} pending session(s)`);
