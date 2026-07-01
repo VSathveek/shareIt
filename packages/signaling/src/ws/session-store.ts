@@ -7,6 +7,8 @@ import { generateCode } from '../pairing/code';
  */
 export interface Peer {
   readonly id: string;
+  /** Stable rate-limit key (client IP); distinct from the per-connection id. */
+  readonly key: string;
   send(msg: SignalingMessage): void;
 }
 

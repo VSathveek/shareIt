@@ -4,6 +4,7 @@ import type { IncomingMessage } from '../src/transfer/channel';
 import { TransferReceiver } from '../src/transfer/receiver';
 import { TransferSender } from '../src/transfer/sender';
 import { InMemoryResumeStore } from '../src/transfer/resume-store';
+import { sha256Hex } from '../src/transfer/integrity';
 import { BufferSink, flush, makeSource, manifestFor, pair, patternBytes } from './helpers';
 
 describe('InMemoryResumeStore', () => {
@@ -68,34 +69,26 @@ describe('resume protocol', () => {
     const store = new InMemoryResumeStore();
     const sink = new BufferSink(); // persists across sessions (append)
 
-    // Session 1: transfer, then drop the connection after the first block commits.
+    // Session 1: deterministically commit exactly the first block, then "drop".
     const [a1, b1] = pair();
-    const r1 = new TransferReceiver({ channel: b1, sink, resumeStore: store });
-    const s1 = new TransferSender({
-      channel: a1,
-      source: makeSource(data),
-      manifest: manifestFor(1000),
-    });
-    const cut = new Promise<void>((resolve) => {
-      const off = r1.on('progress', (p) => {
-        if (p.bytesTransferred >= 256) {
-          a1.disconnect();
-          b1.disconnect();
-          s1.cancel();
-          off();
-          resolve();
-        }
-      });
-    });
-    void s1.start();
-    await cut;
-    await flush();
+    new TransferReceiver({ channel: b1, sink, resumeStore: store });
+    a1.sendControl({ t: 'manifest', manifest: manifestFor(1000) });
 
-    const saved = await store.load('t1');
-    expect(saved?.durableOffset).toBeGreaterThanOrEqual(256);
-    expect(sink.bytes().length).toBe(saved?.durableOffset);
+    const block0 = data.subarray(0, 256);
+    await a1.sendData(block0);
+    a1.sendControl({ t: 'block', index: 0, byteLength: 256, hash: await sha256Hex(block0) });
 
-    // Session 2: fresh connection, same store + sink → completes the file.
+    // Wait for the async hash+persist to land, then drop the connection.
+    for (let i = 0; i < 50 && ((await store.load('t1'))?.durableOffset ?? 0) < 256; i += 1) {
+      await flush();
+    }
+    a1.disconnect();
+    b1.disconnect();
+
+    expect((await store.load('t1'))?.durableOffset).toBe(256);
+    expect(sink.bytes().length).toBe(256);
+
+    // Session 2: fresh connection, same store + sink → resumes and completes the file.
     const [a2, b2] = pair();
     const r2 = new TransferReceiver({ channel: b2, sink, resumeStore: store });
     const done = new Promise<void>((resolve, reject) => {

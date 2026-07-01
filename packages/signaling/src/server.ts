@@ -1,12 +1,15 @@
 import fastifyWebsocket from '@fastify/websocket';
 import Fastify, { type FastifyInstance } from 'fastify';
-import type { Config } from './config';
+import type { Config, SecuritySettings } from './config';
+import { SlidingWindowLimiter } from './security/rate-limiter';
 import { buildIceServers, type TurnSettings } from './turn/credentials';
 import { SignalingHub } from './ws/hub';
 import { registerSignalingRoute } from './ws/route';
 import { InMemorySessionStore } from './ws/session-store';
 
 const NO_TURN: TurnSettings = { stunUrls: [], turnUrls: [], ttlSeconds: 86400 };
+const DEFAULT_SECURITY: SecuritySettings = { createPerMinute: 20, joinPerMinute: 30 };
+const MINUTE_MS = 60 * 1000;
 
 /** Signaling messages are tiny (SDP/ICE); cap payload size to blunt abuse. */
 const MAX_WS_PAYLOAD = 64 * 1024;
@@ -24,12 +27,18 @@ export function buildServer(config?: Partial<Config>): FastifyInstance {
   app.get('/health', async () => ({ status: 'ok', uptime: process.uptime() }));
 
   const turn = config?.turn ?? NO_TURN;
+  const security = config?.security ?? DEFAULT_SECURITY;
+  const originAllowlist = config?.originAllowlist ?? [];
+
   const store = new InMemorySessionStore();
-  const hub = new SignalingHub(store, () => buildIceServers(turn));
+  const hub = new SignalingHub(store, () => buildIceServers(turn), {
+    create: new SlidingWindowLimiter(security.createPerMinute, MINUTE_MS),
+    join: new SlidingWindowLimiter(security.joinPerMinute, MINUTE_MS),
+  });
 
   app.register(fastifyWebsocket, { options: { maxPayload: MAX_WS_PAYLOAD } });
   app.register(async (scoped) => {
-    registerSignalingRoute(scoped, hub);
+    registerSignalingRoute(scoped, hub, { originAllowlist });
   });
 
   app.decorate('sessionStore', store);

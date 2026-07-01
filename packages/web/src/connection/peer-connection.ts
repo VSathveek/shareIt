@@ -1,4 +1,9 @@
-import type { ConnectionState, IceServer } from '@shareit/shared';
+import {
+  deriveShortAuthString,
+  parseDtlsFingerprint,
+  type ConnectionState,
+  type IceServer,
+} from '@shareit/shared';
 
 export type Role = 'offerer' | 'answerer';
 
@@ -59,6 +64,8 @@ export class PeerConnection {
   private remoteDescriptionSet = false;
   private readonly pendingCandidates: RTCIceCandidateInit[] = [];
   private state: ConnectionState = 'idle';
+  private localFingerprint: string | null = null;
+  private remoteFingerprint: string | null = null;
   private resolveReady!: (channel: RTCDataChannel) => void;
   private readonly readyPromise: Promise<RTCDataChannel>;
 
@@ -116,7 +123,17 @@ export class PeerConnection {
 
     const offer = await this.pc.createOffer();
     await this.pc.setLocalDescription(offer);
+    this.localFingerprint = parseDtlsFingerprint(offer.sdp ?? '');
     this.emit('signal', { kind: 'sdp', sdp: offer });
+  }
+
+  /**
+   * Short verification code derived from both peers' DTLS fingerprints. Users compare it
+   * out-of-band to detect a MITM by the signaling server. Null until both descriptions are set.
+   */
+  async authString(): Promise<string | null> {
+    if (!this.localFingerprint || !this.remoteFingerprint) return null;
+    return deriveShortAuthString(this.localFingerprint, this.remoteFingerprint);
   }
 
   /** Handle an inbound signal (SDP or ICE) received via signaling. */
@@ -125,10 +142,12 @@ export class PeerConnection {
       if (data.kind === 'sdp') {
         await this.pc.setRemoteDescription(data.sdp);
         this.remoteDescriptionSet = true;
+        this.remoteFingerprint = parseDtlsFingerprint(data.sdp.sdp ?? '');
         await this.flushCandidates();
         if (data.sdp.type === 'offer') {
           const answer = await this.pc.createAnswer();
           await this.pc.setLocalDescription(answer);
+          this.localFingerprint = parseDtlsFingerprint(answer.sdp ?? '');
           this.emit('signal', { kind: 'sdp', sdp: answer });
         }
       } else {

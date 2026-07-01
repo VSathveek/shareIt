@@ -7,6 +7,8 @@ export * from './transfer/integrity';
 export * from './transfer/sender';
 export * from './transfer/receiver';
 export * from './transfer/resume-store';
+export * from './security/sanitize';
+export * from './security/sas';
 export * from './transport/backpressure';
 export * from './types/connection-state';
 export * from './types/transfer-state';

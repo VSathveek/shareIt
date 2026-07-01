@@ -3,9 +3,9 @@ import { describe, expect, it } from 'vitest';
 import { SignalingHub } from '../src/ws/hub';
 import { InMemorySessionStore, type Peer } from '../src/ws/session-store';
 
-function fakePeer(id: string): Peer & { sent: SignalingMessage[] } {
+function fakePeer(id: string, key = id): Peer & { sent: SignalingMessage[] } {
   const sent: SignalingMessage[] = [];
-  return { id, sent, send: (msg) => sent.push(msg) };
+  return { id, key, sent, send: (msg) => sent.push(msg) };
 }
 
 function newHub() {
@@ -60,6 +60,19 @@ describe('SignalingHub', () => {
     expect(a.sent[0]).toEqual({ t: 'error', reason: 'invalid message' });
     hub.onMessage(a, JSON.stringify({ t: 'join', code: 'bad' }));
     expect(a.sent[1]).toEqual({ t: 'error', reason: 'invalid code' });
+  });
+
+  it('rejects create and join when the limiter denies', () => {
+    const store = new InMemorySessionStore();
+    const deny = { tryAcquire: () => false };
+    const hub = new SignalingHub(store, () => [], { create: deny, join: deny });
+    const a = fakePeer('a');
+
+    hub.onMessage(a, JSON.stringify({ t: 'create' }));
+    expect(a.sent[0]).toEqual({ t: 'error', reason: 'rate limited' });
+
+    hub.onMessage(a, JSON.stringify({ t: 'join', code: 'ABCDEF' }));
+    expect(a.sent[1]).toEqual({ t: 'error', reason: 'rate limited' });
   });
 
   it('notifies the counterpart when a peer disconnects', () => {

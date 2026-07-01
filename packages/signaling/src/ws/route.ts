@@ -1,17 +1,33 @@
 import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import type { SignalingMessage } from '@shareit/shared';
+import { isOriginAllowed } from '../security/origin';
 import type { SignalingHub } from './hub';
 import type { Peer } from './session-store';
 
+export interface RouteOptions {
+  originAllowlist: string[];
+}
+
 /**
- * Thin WebSocket adapter: each socket becomes a `Peer` with a stable id, and all logic is
- * delegated to the hub. Requires `@fastify/websocket` to be registered on `app`.
+ * Thin WebSocket adapter: rejects disallowed origins, then turns each socket into a `Peer`
+ * (id + client-IP rate-limit key) and delegates all logic to the hub. Requires
+ * `@fastify/websocket` to be registered on `app`.
  */
-export function registerSignalingRoute(app: FastifyInstance, hub: SignalingHub): void {
-  app.get('/ws', { websocket: true }, (socket) => {
+export function registerSignalingRoute(
+  app: FastifyInstance,
+  hub: SignalingHub,
+  options: RouteOptions,
+): void {
+  app.get('/ws', { websocket: true }, (socket, req) => {
+    if (!isOriginAllowed(req.headers.origin, options.originAllowlist)) {
+      socket.close(1008, 'origin not allowed');
+      return;
+    }
+
     const peer: Peer = {
       id: randomUUID(),
+      key: req.ip,
       send: (msg: SignalingMessage) => {
         if (socket.readyState === socket.OPEN) socket.send(JSON.stringify(msg));
       },

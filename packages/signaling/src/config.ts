@@ -4,6 +4,11 @@
  */
 import type { TurnSettings } from './turn/credentials';
 
+export interface SecuritySettings {
+  createPerMinute: number;
+  joinPerMinute: number;
+}
+
 export interface Config {
   host: string;
   port: number;
@@ -11,6 +16,7 @@ export interface Config {
   originAllowlist: string[];
   logLevel: string;
   turn: TurnSettings;
+  security: SecuritySettings;
 }
 
 const DEFAULT_STUN = 'stun:stun.l.google.com:19302';
@@ -33,6 +39,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     throw new Error(`Invalid TURN_TTL: ${String(env.TURN_TTL)}`);
   }
 
+  const createPerMinute = Number(env.CREATE_PER_MIN ?? 20);
+  const joinPerMinute = Number(env.JOIN_PER_MIN ?? 30);
+  if (createPerMinute <= 0 || joinPerMinute <= 0) {
+    throw new Error('rate limits must be positive');
+  }
+
   return {
     host: env.HOST ?? '0.0.0.0',
     port,
@@ -44,5 +56,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       secret: env.TURN_SECRET || undefined,
       ttlSeconds,
     },
+    security: { createPerMinute, joinPerMinute },
   };
 }

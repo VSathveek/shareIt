@@ -1,6 +1,12 @@
 import type { IceServer, SignalingMessage } from '@shareit/shared';
 import { isValidCodeFormat } from '../pairing/code';
+import type { RateLimiter } from '../security/rate-limiter';
 import type { Peer, SessionStore } from './session-store';
+
+export interface HubLimiters {
+  create?: RateLimiter;
+  join?: RateLimiter;
+}
 
 /**
  * Transport-agnostic signaling logic. Given a `Peer` (an id + a `send`) and a raw text
@@ -12,6 +18,7 @@ export class SignalingHub {
   constructor(
     private readonly store: SessionStore,
     private readonly iceServers: () => IceServer[],
+    private readonly limiters: HubLimiters = {},
   ) {}
 
   onMessage(peer: Peer, raw: string): void {
@@ -23,11 +30,20 @@ export class SignalingHub {
 
     switch (msg.t) {
       case 'create': {
+        if (this.limiters.create && !this.limiters.create.tryAcquire(peer.key)) {
+          peer.send({ t: 'error', reason: 'rate limited' });
+          return;
+        }
         const session = this.store.create(peer);
         peer.send({ t: 'created', code: session.code, iceServers: this.iceServers() });
         return;
       }
       case 'join': {
+        // Rate-limit every join attempt (including wrong codes) to cap brute force.
+        if (this.limiters.join && !this.limiters.join.tryAcquire(peer.key)) {
+          peer.send({ t: 'error', reason: 'rate limited' });
+          return;
+        }
         if (!isValidCodeFormat(msg.code)) {
           peer.send({ t: 'error', reason: 'invalid code' });
           return;
