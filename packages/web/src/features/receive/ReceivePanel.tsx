@@ -5,6 +5,7 @@ import { useTransferSession } from '../../hooks/useTransferSession';
 import { IndexedDbResumeStore } from '../../transfer/indexeddb-resume-store';
 import { MemorySink } from '../../transfer/sinks/memory-sink';
 import { pickDiskSink } from '../../transfer/sinks/disk-sink';
+import { formatBytes } from '../../lib/format';
 import { ProgressView } from '../transfer/ProgressView';
 
 interface Props {
@@ -12,39 +13,73 @@ interface Props {
 }
 
 /**
- * Receive view: enter the code → choose where to save → connect and reassemble the file.
- * Streaming tier saves straight to disk (File System Access); otherwise a memory-backed download.
+ * Receive view. Two steps so the file is saved with its real name/type:
+ *   1. enter code → connect (the sender waits before sending bytes),
+ *   2. once the file's name is known, a Save click (fresh user gesture) opens the save dialog
+ *      with the correct filename, then the transfer proceeds.
  */
 export function ReceivePanel({ tier }: Props) {
   const { state, receive } = useTransferSession();
   const [code, setCode] = useState('');
-  const [connecting, setConnecting] = useState(false);
-  const memorySink = useRef<MemorySink | null>(null);
+  const [phase, setPhase] = useState<'enter' | 'connecting' | 'transferring'>('enter');
+  const resolveSink = useRef<((sink: Sink) => void) | null>(null);
 
-  // Once the manifest arrives we know the real filename; apply it to the memory sink's download.
-  useEffect(() => {
-    const path = state.manifest?.files[0]?.path;
-    if (path && memorySink.current) memorySink.current.fileName = sanitizeFilename(path);
-  }, [state.manifest]);
+  const incoming = state.manifest?.files[0];
+  const incomingName = incoming ? sanitizeFilename(incoming.path) : null;
 
-  const connect = async () => {
-    let sink: Sink | null = null;
-    if (tier === 'streaming') {
-      sink = await pickDiskSink('shareit-download'); // user gesture: prompt for save location now
-    }
-    if (!sink) {
-      const mem = new MemorySink('shareit-download');
-      memorySink.current = mem;
-      sink = mem;
-    }
-    setConnecting(true);
+  const connect = () => {
+    setPhase('connecting');
+    // The receiver awaits this factory before replying `resume`, so nothing streams until Save.
+    const sink = () => new Promise<Sink>((resolve) => (resolveSink.current = resolve));
     receive(code.trim().toUpperCase(), { sink, resumeStore: new IndexedDbResumeStore() });
   };
 
-  if (connecting) {
+  const save = async () => {
+    const name = incomingName ?? 'download';
+    let sink: Sink | null = null;
+    if (tier === 'streaming') {
+      sink = await pickDiskSink(name); // user gesture is live here, with the real filename
+    }
+    if (!sink) sink = new MemorySink(name);
+    resolveSink.current?.(sink);
+    setPhase('transferring');
+  };
+
+  // Surface a transfer error by returning to the entry screen state via the ProgressView banner.
+  useEffect(() => {
+    if (state.error && phase === 'connecting') setPhase('transferring');
+  }, [state.error, phase]);
+
+  if (phase === 'transferring') {
     return (
       <div className="panel">
         <ProgressView state={state} verb="Receiving" />
+      </div>
+    );
+  }
+
+  if (phase === 'connecting') {
+    return (
+      <div className="panel">
+        {incoming ? (
+          <>
+            <div className="code-card">
+              <span className="code-card__label">Incoming file</span>
+              <span className="progress__file">
+                <strong>{incomingName}</strong> ({formatBytes(incoming.size)})
+              </span>
+            </div>
+            <button className="btn btn--primary" onClick={save}>
+              Save file
+            </button>
+            {tier === 'memory-limited' && (
+              <p className="panel__note">Large files will be capped in this browser.</p>
+            )}
+          </>
+        ) : (
+          <p className="progress__status">Connecting… waiting for the sender.</p>
+        )}
+        {state.error && <div className="banner banner--error">Error: {state.error}</div>}
       </div>
     );
   }

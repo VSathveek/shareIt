@@ -49,6 +49,35 @@ describe('transfer round-trip', () => {
     expect(last).toBe(500);
   });
 
+  it('resolves a sink factory (with the manifest) before data flows', async () => {
+    const data = patternBytes(400);
+    const [sa, sb] = pair();
+    const sink = new BufferSink();
+    let factoryName: string | undefined;
+
+    const receiver = new TransferReceiver({
+      channel: sb,
+      sink: (manifest) => {
+        factoryName = manifest.files[0]?.path;
+        return sink;
+      },
+    });
+    const done = new Promise<void>((resolve, reject) => {
+      receiver.on('done', resolve);
+      receiver.on('error', reject);
+    });
+    const sender = new TransferSender({
+      channel: sa,
+      source: makeSource(data),
+      manifest: manifestFor(400),
+    });
+    await sender.start();
+    await done;
+
+    expect(factoryName).toBe('f.bin'); // factory saw the real filename
+    expect(sink.bytes()).toEqual(data);
+  });
+
   it('rejects a tampered block via the hash check', async () => {
     const data = new Uint8Array(300).fill(3);
     const [sa, sb] = pair();

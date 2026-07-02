@@ -5,7 +5,7 @@ import type {
   ReceiverOptions,
   ResumeStore,
   SenderOptions,
-  Sink,
+  SinkOrFactory,
   TransferChannel,
   TransferProgress,
 } from '@shareit/shared';
@@ -53,7 +53,7 @@ export interface SessionDeps {
 }
 
 export interface ReceiveOptions {
-  sink: Sink;
+  sink: SinkOrFactory;
   resumeStore?: ResumeStore;
 }
 

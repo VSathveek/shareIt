@@ -4,9 +4,17 @@ import type { IncomingMessage, Sink, TransferChannel } from './channel';
 import type { ResumeStore } from './resume-store';
 import { sha256Hex } from './integrity';
 
+/**
+ * Where received bytes go. A plain `Sink` is used immediately; a factory is awaited *after* the
+ * manifest arrives — so the app can prompt for a save location using the real filename (and a
+ * fresh user gesture) before any data flows. The sender waits for our `resume`, so the transfer
+ * pauses until the sink is ready.
+ */
+export type SinkOrFactory = Sink | ((manifest: Manifest) => Sink | Promise<Sink>);
+
 export interface ReceiverOptions {
   channel: TransferChannel;
-  sink: Sink;
+  sink: SinkOrFactory;
   /** When provided, durable offsets persist across sessions so transfers can resume. */
   resumeStore?: ResumeStore;
   /** Called when the manifest arrives (filename/size become known) — for UI + sink naming. */
@@ -31,7 +39,8 @@ interface ReceiverEvents {
  */
 export class TransferReceiver {
   private readonly channel: TransferChannel;
-  private readonly sink: Sink;
+  private readonly sinkOrFactory: SinkOrFactory;
+  private sink: Sink | null = null;
   private readonly resumeStore: ResumeStore | undefined;
   private readonly onManifestCb: ((manifest: Manifest) => void) | undefined;
   private readonly now: () => number;
@@ -54,7 +63,7 @@ export class TransferReceiver {
 
   constructor(opts: ReceiverOptions) {
     this.channel = opts.channel;
-    this.sink = opts.sink;
+    this.sinkOrFactory = opts.sink;
     this.resumeStore = opts.resumeStore;
     this.onManifestCb = opts.onManifest;
     this.now = opts.now ?? (() => Date.now());
@@ -89,7 +98,7 @@ export class TransferReceiver {
         await this.finish();
         return;
       case 'cancel':
-        await this.sink.abort?.();
+        await this.sink?.abort?.();
         this.fail(new Error('cancelled by sender'));
         return;
       default:
@@ -101,6 +110,14 @@ export class TransferReceiver {
     this.manifest = manifest;
     this.total = manifest.files.reduce((sum, f) => sum + f.size, 0);
     this.onManifestCb?.(manifest);
+
+    // Resolve the sink now the filename is known (may await a user's save-location choice).
+    // The sender waits for `resume`, so no bytes flow until this completes.
+    this.sink =
+      typeof this.sinkOrFactory === 'function'
+        ? await this.sinkOrFactory(manifest)
+        : this.sinkOrFactory;
+
     const record = await this.resumeStore?.load(manifest.transferId);
     this.durableOffset = record?.durableOffset ?? 0;
     this.baseline = this.durableOffset;
@@ -120,6 +137,7 @@ export class TransferReceiver {
       return this.fail(new Error(`block ${index} integrity check failed`));
     }
 
+    if (!this.sink) return this.fail(new Error('no sink available'));
     await this.sink.write(block);
     this.durableOffset += block.length;
     if (this.manifest) {
@@ -138,7 +156,7 @@ export class TransferReceiver {
         new Error(`incomplete transfer: ${this.durableOffset}/${this.total} bytes`),
       );
     }
-    await this.sink.close();
+    await this.sink?.close();
     if (this.manifest) await this.resumeStore?.clear(this.manifest.transferId);
     this.emit('done');
   }
