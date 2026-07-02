@@ -25,4 +25,3 @@ Early design. See [`docs/`](docs/) — currently at **Phase 1: Requirements Revi
 docs/     Design documents, one per phase
 ```
 
-Application code is added phase by phase, after each phase is reviewed and approved.
